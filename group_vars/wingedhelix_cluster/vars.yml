@@ -77,21 +77,27 @@ ldap_domains:
     group_member: member
     create_ldap: true
     ldap_db_index: 3  # Indices up to 2 are already used by default for the "config", "monitor" and "example" databases.
-  sram:
+  sramraw:
     uri: "ldaps://{{ stack_prefix }}-dai"
     base: dc=umcg-hpc-gd,dc=services,dc=sram,dc=surf,dc=nl
+    create_ldap: true
+    used_for_auth: false
+    ldap_db_index: 4  # Indices up to 2 are already used by default for the "config", "monitor" and "example" databases.
+    replication_provider_uri: ldaps://ldap.sram.surf.nl
+    replication_provider_base: dc=flat,dc=umcg-hpc-gd,dc=services,dc=sram,dc=surf,dc=nl
+  sram:
+    uri: "ldaps://{{ stack_prefix }}-dai"
+    base: dc=umcg-hpc-gd,dc=services,dc=sram,dc=local
     schema: rfc2307bis
-    #min_id: 70000000
-    #max_id: 72999999
+    min_id: 80000000
+    max_id: 82999999
     user_object_class: posixAccount
     user_name: uid
     user_ssh_public_key: sshPublicKey
     user_member_of: groupMembership
     group_member: member
     create_ldap: true
-    ldap_db_index: 4  # Indices up to 2 are already used by default for the "config", "monitor" and "example" databases.
-    replication_provider_uri: ldaps://ldap.sram.surf.nl
-    replication_provider_base: dc=umcg-hpc-gd,dc=services,dc=sram,dc=surf,dc=nl
+    ldap_db_index: 5  # Indices up to 2 are already used by default for the "config", "monitor" and "example" databases.
   idvault:
     uri: ldaps://svrs.id.rug.nl
     base: ou=gd,o=asds
