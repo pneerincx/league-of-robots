@@ -30,15 +30,6 @@ public_keys_of_local_admins: "{{ local_admin_users | map('extract', auth_users) 
     | map(attribute='pub_keys') \
     | map('regex_findall', '^([^\\n]+)', 'multiline=True') | flatten }}"
 #
-# Networking.
-#
-host_network_names: "{{ host_networks | map(attribute='name') | flatten | unique }}"
-first_management_network_name: "{{ stack_networks
-    | selectattr('type', 'equalto', 'management')
-    | map(attribute='name')
-    | intersect(host_network_names)
-    | first }}"
-#
 # Local group specs.
 # Note:
 #  * All local groups are listed here.
@@ -164,6 +155,11 @@ yum_repos:
   - name: lustre7
     description: 'Lustre client Long Term Support (LTS) releases for Enterprise Linux 7.'
     baseurl: https://downloads.whamcloud.com/public/lustre/latest-2.12-release/el7/client/
+    gpgcheck: 'false'
+    gpgkey: ''
+  - name: ltb7
+    description: 'LTB (LDAP Tool Box) project OpenLDAP packages for Enterprise Linux 7.'
+    baseurl: https://ltb-project.org/rpm/openldap25/7/x86_64/
     gpgcheck: 'false'
     gpgkey: ''
 ...
