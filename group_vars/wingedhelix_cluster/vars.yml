@@ -85,7 +85,7 @@ ldap_domains:
     ldap_db_index: 4  # Indices up to 2 are already used by default for the "config", "monitor" and "example" databases.
     replication_provider_uri: ldaps://ldap.sram.surf.nl
     replication_provider_base: dc=flat,dc=umcg-hpc-gd,dc=services,dc=sram,dc=surf,dc=nl
-  sram:
+  sramposix:
     uri: "ldaps://{{ stack_prefix }}-dai"
     base: dc=umcg-hpc-gd,dc=services,dc=sram,dc=local
     schema: rfc2307bis
