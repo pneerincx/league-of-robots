@@ -1,0 +1,444 @@
+#!/bin/bash
+
+#
+# Code Conventions:
+# 	Indentation:           TABs only
+# 	Functions:             camelCase
+# 	Global Variables:      lower_case_with_underscores
+# 	Local Variables:       _lower_case_with_underscores_and_prefixed_with_underscore
+# 	Environment Variables: UPPER_CASE_WITH_UNDERSCORES
+#
+
+config_file='{{ sram_posix_config_file }}'
+
+#
+##
+### Environment and Bash sanity.
+##
+#
+if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+	printf 'FATAL: Sorry, you need at least bash 4.x to use %s.\n' "${0}" >&2
+	exit 1
+fi
+
+set -e # Exit if any subcommand or pipeline returns a non-zero exit status.
+set -u # Raise exception if variable is unbound. Combined with set -e will halt execution when an unbound variable is encountered.
+set -o pipefail # Fail when any command in series of piped commands failed as opposed to only when the last command failed.
+
+umask 0077
+
+export TMPDIR="${TMPDIR:-/tmp}" # Default to /tmp if $TMPDIR was not defined.
+
+#
+# Make sure UTF-8 is used and dots are used as decimal separator.
+#
+LANG='en_US.UTF-8'
+LC_NUMERIC="${LANG}"
+
+#
+##
+### Functions.
+##
+#
+function showHelp() {
+	#
+	# Display commandline help on STDOUT.
+	#
+	cat <<EOH
+===============================================================================================================
+$(basename "${0}"): a bash script that uses standard OpenLDAP commandline tools (ldapsearch, ldapmodify) to
+ * fetch SRAM data from a source LDAP server,
+ * transform & supplement the entries and
+ * and add/update the entries to/in a destination LDAP server.
+Transformation includes:
+ * Adding the posixAccount and posixGroup object classes.
+ * Replacing the SRAM uid values with email addresses.
+ * Assigning unique uidNumber and gidNumber values.
+ * Adding loginShell, homeDirectory and gecos attributes.
+ * Deleting the sshPublicKey values for accounts that have been suspended,
+   have expired or were deleted in the source LDAP.
+
+Usage:
+
+	$(basename "${0}") OPTIONS
+
+OPTIONS:
+
+	-h   Show this help.
+	-a   Apply (new) settings to the File System(s).
+	     By default this script will only do a "dry run" and list the transformed LDAP entries.
+	-b   Backup directory. Will create a full backup of both the transformed user and transformed group info
+	     from the destination LDAP in the specified dir.
+	-l   Log level.
+	     Must be one of TRACE, DEBUG, INFO (default), WARN, ERROR or FATAL.
+
+LDAP credentials and connection details will be sourced from config file: ${config_file}
+===============================================================================================================
+
+EOH
+	#
+	# Reset trap and exit.
+	#
+	trap - EXIT
+	exit 0
+}
+
+#
+# Custom signal trapping functions (one for each signal) required to format log lines depending on signal.
+#
+function trapSig() {
+	for _sig; do
+		trap 'trapHandler '"${_sig}"' "${LINENO}" ${FUNCNAME[0]:-main} ${?}' "${_sig}"
+	done
+}
+
+function trapHandler() {
+	local _signal="${1}"
+	local _line="${2}"
+	local _function="${3}"
+	local _status="${4}"
+	log4Bash 'FATAL' "${_line}" "${_function}" "${_status}" "Trapped ${_signal} signal."
+}
+
+#
+# Trap all exit signals: HUP(1), INT(2), QUIT(3), TERM(15), ERR.
+#
+trapSig HUP INT QUIT TERM EXIT ERR
+
+#
+# Catch all function for logging using log levels like in Log4j.
+# ARGS: LOG_LEVEL, LINENO, FUNCNAME, EXIT_STATUS and LOG_MESSAGE.
+#
+function log4Bash() {
+	#
+	# Validate params.
+	#
+	if [[ ! "${#}" -eq 5 ]]; then
+		printf 'WARN: should have passed 5 arguments to %s: log_level, LINENO, FUNCNAME, (Exit) STATUS and log_message.\n' "${FUNCNAME[0]}"
+	fi
+	#
+	# Determine prio.
+	#
+	local _log_level="${1}"
+	local _log_level_prio="${l4b_log_levels["${_log_level}"]}"
+	local _status="${4:-$?}"
+	#
+	# Log message if prio exceeds threshold.
+	#
+	if [[ "${_log_level_prio}" -ge "${l4b_log_level_prio}" ]]; then
+		local _problematic_line="${2:-'?'}"
+		local _problematic_function="${3:-'main'}"
+		local _log_message="${5:-'No custom message.'}"
+		#
+		# Some signals erroneously report $LINENO = 1,
+		# but that line contains the shebang and cannot be the one causing problems.
+		#
+		if [[ "${_problematic_line}" -eq 1 ]]; then
+			_problematic_line='?'
+		fi
+		#
+		# Format message.
+		#
+		local _log_timestamp
+		local _log_line_prefix
+		local _log_line
+		_log_timestamp="$(date "+%Y-%m-%dT%H:%M:%S")" # Creates ISO 8601 compatible timestamp.
+		_log_line_prefix=$(printf "%-s %-s %-5s @ L%-s(%-s)>" "${SCRIPT_NAME}" "${_log_timestamp}" "${_log_level}" "${_problematic_line}" "${_problematic_function}")
+		_log_line="${_log_line_prefix} ${_log_message}"
+		if [[ -n "${mixed_stdouterr:-}" ]]; then
+			_log_line="${_log_line} STD[OUT+ERR]: ${mixed_stdouterr}"
+		fi
+		if [[ "${_status}" -ne 0 ]]; then
+			_log_line="${_log_line} (Exit status = ${_status})"
+		fi
+		#
+		# Log to STDOUT (low prio <= 'WARN') or STDERR (high prio >= 'ERROR').
+		#
+		if [[ "${_log_level_prio}" -ge "${l4b_log_levels['ERROR']}" || "${_status}" -ne 0 ]]; then
+			printf '%s\n' "${_log_line}" > /dev/stderr
+		else
+			printf '%s\n' "${_log_line}"
+		fi
+	fi
+	#
+	# Exit if this was a FATAL error.
+	#
+	if [[ "${_log_level_prio}" -ge "${l4b_log_levels['FATAL']}" ]]; then
+		#
+		# Reset trap and exit.
+		#
+		trap - EXIT
+		if [[ "${_status}" -ne 0 ]]; then
+			exit "${_status}"
+		else
+			exit 1
+		fi
+	fi
+}
+
+#
+# Parse LDIF records and apply quota to Physical File Systems (PFSs).
+#
+function parseLdif () {
+	local _ldif_file="${1}"
+	local _object_class="${2}"
+	local _ldap_attr_regex='([^: ]{1,})(:{1,2}) ([^:]{1,})'
+	#
+	# Append the NULL character to the LDIF file, so we can detect that as EOF instead of a newline.
+	#
+	printf '\0' >> "${_ldif_file}"
+	#
+	# Substitute the blank line record separator with a # character and read records into an array.
+	#
+	IFS='#' read -r -d '' -a _ldif_records < <(sed 's/^$/#/' "${_ldif_file}") || log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" $? "Parsing LDIF file (${_ldif_file}) into records failed."
+	#
+	# Loop over records in the array and create a faked-multi-dimensional hash.
+	#
+	local _ldif_record
+	for _ldif_record in "${_ldif_records[@]}"; do
+		#
+		# Remove trailing white space like the new line character.
+		# And skip blank lines.
+		#
+		_ldif_record="${_ldif_record%%[[:space:]]}"
+		[[ "${_ldif_record}" == '' ]] && continue
+		log4Bash 'DEBUG' "${LINENO}" "${FUNCNAME:-main}" '0' "LDIF record contains: ${_ldif_record}"
+		#
+		# Parse record's key:value pairs.
+		#
+		local -A _directory_record_attributes=()
+		local    _ldif_line
+		while IFS=$'\n' read -r _ldif_line; do
+			[[ "${_ldif_line}" == '' ]] && continue # Skip blank lines.
+			log4Bash 'TRACE' "${LINENO}" "${FUNCNAME:-main}" '0' "LDIF key:value pair contains: ${_ldif_line}."
+			if [[ "${_ldif_line}" =~ ${_ldap_attr_regex} ]]; then
+				local _key="${BASH_REMATCH[1],,}" # Convert key on-the-fly to lowercase.
+				local _sep="${BASH_REMATCH[2]}"
+				local _value="${BASH_REMATCH[3]}"
+				#
+				# This may be a multi-valued attribute and therefore check if key already exists;
+				# When key already exists make sure we append instead of overwriting the existing value(s)!
+				#
+				if [[ -n "${_directory_record_attributes[${_key}]+isset}" ]]; then
+					_directory_record_attributes["${_key}"]="${_directory_record_attributes[${_key}]} ${_value}"
+				else
+					_directory_record_attributes["${_key}"]="${_value}"
+				fi
+				log4Bash 'TRACE' "${LINENO}" "${FUNCNAME:-main}" '0' "     key   contains: ${_key}."
+				log4Bash 'TRACE' "${LINENO}" "${FUNCNAME:-main}" '0' "     value contains: ${_value}."
+			else
+				log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" '1' "Failed to parse LDIF key:value pair (${_ldif_line})."
+			fi
+		done < <(printf '%s\n' "${_ldif_record}") || log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" $? "Parsing LDIF record failed."
+		#
+		# Use processed LDIF record to create new transformed user or group objects
+		#
+		if [[ -n "${_directory_record_attributes['dn']+isset}" ]]; then
+			log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" '1' "Skipping record, because dn attribute is missing for ${_ldif_record}"
+			continue
+		fi
+		local _ldif
+		if [[ "${_object_class}" == "${source_ldap_user_object_class}" ]]; then
+			local _new_dn="uid=${_directory_record_attributes['mail']},${destination_ldap_base_dn}"
+			user_dn_mapping["${_directory_record_attributes['dn']}"]="${_new_dn}"
+			#
+			# ToDo: check if we already have a UID.
+			#
+			local _next_uid=''
+			read -r -d '' _ldif <<- ENDOFLDIFF
+				dn: ${_new_dn}
+				changetype: modify
+				replace: objectClass
+				objectClass: inetOrgPerson
+				objectClass: ldapPublicKey
+				objectClass: posixAccount
+				objectClass: posixGroup
+				-
+				replace: uid
+				uid: ${_directory_record_attributes['mail']}
+				-
+				replace: cn
+				cn: ${_directory_record_attributes['mail']}
+				-
+				replace: mail
+				mail: ${_directory_record_attributes['mail']}
+				-
+				replace: givenName
+				givenName: ${_directory_record_attributes['givenname']}
+				-
+				replace: sn
+				sn: ${_directory_record_attributes['sn']}
+				-
+				replace: displayName
+				displayName: ${_directory_record_attributes['displayname']}
+				-
+				replace: gecos
+				gecos: ${_directory_record_attributes['displayname']} <${_directory_record_attributes['mail']}>
+				-
+				replace: loginShell
+				loginShell: /bin/bash
+				-
+				replace: homeDirectory
+				homeDirectory: /home/${_directory_record_attributes['mail']}
+				-
+				replace uidNumber
+				uidNumber: ${_uid}
+				-
+				replace: gidNumber
+				gidNumber: ${_uid}
+				-
+				ENDOFLDIFF
+		elif [[ "${_object_class}" == "${source_ldap_group_object_class}" ]]; then
+			read -r -d '' _ldif <<- ENDOFLDIFF
+				This is line 1.
+				This is line 2.
+				Line 3.
+				ENDOFLDIFF
+		else
+			log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" '1' "Got unsupported object class ${_object_class}."
+		fi
+		log4Bash 'INFO' "${LINENO}" "${FUNCNAME:-main}" '0' "ldif contains: ${_ldif}"
+		if [[ "${apply_settings}" -eq 1 ]]; then
+			log4Bash 'INFO' "${LINENO}" "${FUNCNAME:-main}" '0' "   Adding transformed object to destination LDAP with ldapmodify..."
+		fi
+	done
+}
+
+#
+##
+### Variables.
+##
+#
+
+groups_ldif="${TMPDIR}/groups.ldif"
+users_ldif="${TMPDIR}/users.ldif"
+declare -A user_dn_mapping=()  # Hash to map user dn values from the source LDAP to transformed dn values in the destination LDAP.
+SCRIPT_NAME="$(basename "${0}" .bash)"
+mixed_stdouterr='' # global variable to capture output from commands for reporting in custom log messages.
+
+#
+# Initialise Log4Bash logging with defaults.
+#
+l4b_log_level="${log_level:-INFO}"
+declare -A l4b_log_levels=(
+	['TRACE']='0'
+	['DEBUG']='1'
+	['INFO']='2'
+	['WARN']='3'
+	['ERROR']='4'
+	['FATAL']='5'
+)
+l4b_log_level_prio="${l4b_log_levels[${l4b_log_level}]}"
+
+#
+##
+### Main.
+##
+#
+
+#
+# Get commandline arguments.
+#
+declare    apply_settings=0
+while getopts "l:b:ah" opt; do
+	case $opt in
+		h)
+			showHelp
+			;;
+		b)
+			backup_dir="${OPTARG}"
+			;;
+		a)
+			apply_settings=1
+			;;
+		l)
+			l4b_log_level=${OPTARG^^}
+			l4b_log_level_prio=${l4b_log_levels[${l4b_log_level}]}
+			;;
+		\?)
+			log4Bash "${LINENO}" "${FUNCNAME:-main}" '1' "Invalid option -${OPTARG}. Try $(basename $0) -h for help."
+			;;
+		:)
+			log4Bash "${LINENO}" "${FUNCNAME:-main}" '1' "Option -${OPTARG} requires an argument. Try $(basename $0) -h for help."
+			;;
+		esac
+done
+
+if [[ "${apply_settings}" -eq 1 ]]; then
+	log4Bash 'INFO' "${LINENO}" "${FUNCNAME:-main}" '0' 'Found option -a: will modify/add entries in destination LDAP.'
+else
+	log4Bash 'INFO' "${LINENO}" "${FUNCNAME:-main}" '0' 'Option -a not specified: will only perform a "dry run". Use -a to apply settings.'
+fi
+
+#
+# Source config file
+#
+if [[ -r "${config_file}" ]];
+	source "${config_file}"
+else
+	log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" '0' "Cannot read config file ${config_file}. Check path and permissions."
+fi
+
+#
+# Query LDAP.
+#
+log4Bash 'DEBUG' "${LINENO}" "${FUNCNAME:-main}" '0' "Retrieving data from source LDAP..."
+mixed_stdouterr=$(ldapsearch -LLL -o ldif-wrap=no -D "${LDAP_USER}" -w "${LDAP_PASS}" -b "${LDAP_SEARCH_BASE}" \
+					"(ObjectClass=${source_ldap_group_object_class})" 2>&1 >"${groups_ldif}") \
+					|| log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" $? "ldapsearch failed."
+mixed_stdouterr=$(ldapsearch -LLL -o ldif-wrap=no -D "${LDAP_USER}" -w "${LDAP_PASS}" -b "${LDAP_SEARCH_BASE}" \
+					"(ObjectClass=${source_ldap_user_object_class})" 2>&1 > "${users_ldif}") \
+					|| log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" $? "ldapsearch failed."
+log4Bash 'DEBUG' "${LINENO}" "${FUNCNAME:-main}" '0' "ldapsearch results were saved to ${groups_ldif} and ${users_ldif}."
+
+parseLdif "${groups_ldif}"
+parseLdif "${users_ldif}"
+
+#
+# Cleanup tmp files.
+#
+if [[ "${l4b_log_level_prio}" -lt "${l4b_log_levels['INFO']}" ]]; then
+	log4Bash 'DEBUG' "${LINENO}" "${FUNCNAME:-main}" 0 "Debug mode: temporary files ${groups_ldif} and ${users_ldif} won't be removed."
+else
+	rm -f "${groups_ldif}"
+	rm -f "${users_ldif}"
+fi
+
+#
+# Optional: Make backup of (complete) list of users and group
+#           Perform new LDAP search to list all fields accessible to user who performs the query.
+#
+if [[ ! -z "${backup_dir:-}" ]]; then
+	#
+	# Create directory for backups.
+	#
+	log4Bash 'DEBUG' "${LINENO}" "${FUNCNAME:-main}" '0' "Creating backup dir ${backup_dir}..."
+	mixed_stdouterr=$(mkdir -m 0700 -p "${backup_dir}" 2>&1) \
+					|| log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" $? "Failed to create backup dir ${backup_dir}."
+	if [[ -d "${backup_dir}" && -w "${backup_dir}" ]]; then
+		log4Bash 'DEBUG' "${LINENO}" "${FUNCNAME:-main}" '0' "Backup dir ${backup_dir} is Ok."
+	else
+		log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" '0' "Backup dir ${backup_dir} cannot be used. Check path and permissions."
+	fi
+	#
+	# Create timestamp.
+	#
+	BACKUP_TS=`date "+%Y-%m-%d-T%H%M"`
+	groups_backup_ldif="${backup_dir}/groups-${BACKUP_TS}.ldif"
+	users_backup_ldif="${backup_dir}/users-${BACKUP_TS}.ldif"
+	log4Bash 'DEBUG' "${LINENO}" "${FUNCNAME:-main}" '0' "Retrieving data from destination LDAP for backup..."
+	mixed_stdouterr=$(ldapsearch -o ldif-wrap=no -LLL -D "${LDAP_USER}" -w "${LDAP_PASS}" -b "${LDAP_SEARCH_BASE}" \
+					"(ObjectClass=GroupofNames)" 2>&1 >"${groups_backup_ldif}") \
+						|| log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" $? "ldapsearch failed."
+	mixed_stdouterr=$(ldapsearch -o ldif-wrap=no -LLL -D "${LDAP_USER}" -w "${LDAP_PASS}" -b "${LDAP_SEARCH_BASE}" \
+					"(ObjectClass=person)" 2>&1 > "${users_backup_ldif}") \
+						|| log4Bash 'FATAL' "${LINENO}" "${FUNCNAME:-main}" $? "ldapsearch failed."
+	log4Bash 'DEBUG' "${LINENO}" "${FUNCNAME:-main}" '0' "ldapsearch results for backup were saved to ${groups_backup_ldif} and ${users_backup_ldif}."
+fi
+
+#
+# Reset trap and exit.
+#
+log4Bash 'INFO' "${LINENO}" "${FUNCNAME:-main}" 0 "Finished!"
+trap - EXIT
+exit 0

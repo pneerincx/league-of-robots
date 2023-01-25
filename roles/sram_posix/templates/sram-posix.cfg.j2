@@ -1,0 +1,15 @@
+#
+##
+### Ansible templated variables.
+##
+#
+source_ldap_uri='{{ ldap_domains['sramraw']['uri'] }}'
+source_ldap_user='{{ ldap_credentials['sramraw']['readonly']['dn'] }}'
+source_ldap_pass='{{ ldap_credentials['sramraw']['readonly']['pw'] }}'
+source_ldap_base_dn='{{ ldap_domains['sramraw']['base'] }}'
+#source_ldap_group_object_class='groupOfMembers'
+#source_ldap_user_object_class='person'
+destination_ldap_uri='{{ ldap_domains['sramposix']['uri'] }}'
+destination_ldap_user='{{ ldap_credentials['sramposix']['admin']['dn'] }}'
+destination_ldap_pass='{{ ldap_credentials['sramposix']['admin']['pw'] }}'
+destination_ldap_base_dn='{{ ldap_domains['sramposix']['base'] }}'

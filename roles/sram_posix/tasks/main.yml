@@ -1,0 +1,19 @@
+---
+- name: "Deploy {{ sram_posix_config_file }}"
+  ansible.builtin.template:
+    src: sram-posix.cfg.j2
+    dest: "{{ sram_posix_config_file }}"
+    owner: root
+    group: root
+    mode: '0400'
+  become: true
+
+- name: "Deploy sram-posix.bash script."
+  ansible.builtin.template:
+    src: sram-posix.bash.j2
+    dest: "/root/sram-posix.bash"
+    owner: root
+    group: root
+    mode: '0500'
+  become: true
+...
