@@ -1,5 +1,13 @@
 ---
-mc_infra_catalog:
+#  1T5SMK3 nov 19 2029
+#  71SRQK3 nov 21 2029
+#  81SRQK3 nov 21 2029
+#  51SRQK3 nov 24 2029
+#  61SRQK3 nov 24 2029
+#  B1MKSK3 nov 25 2029
+#  22F3RK3 nov 24 2029
+#  32F3RK3 nov 24 2029
+ul_infra_catalog:
   children:
     mc_sw_1:
       vars:
