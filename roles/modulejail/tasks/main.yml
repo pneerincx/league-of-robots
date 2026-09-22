@@ -1,9 +1,12 @@
 ---
 - name: Install modulejail RPM from remote repo.
   ansible.builtin.package:
-    name: "https://github.com/jnuyens/modulejail/releases/download/v{{ modulejail_version }}/modulejail-{{ modulejail_version }}-{{ modulejail_release }}.noarch.rpm"
+    name: "{{ path }}/{{ file }}"
     state: latest
     disable_gpg_check: true
+  vars:
+    path: "https://github.com/jnuyens/modulejail/releases/download/v{{ modulejail_version }}"
+    file: "modulejail-{{ modulejail_version }}-{{ modulejail_release }}.noarch.rpm"
   become: true
 
 - name: 'Create folder for modulejail config.'
@@ -50,7 +53,7 @@
   become: true
 
 - name: Report modulejail status.
-  debug:
+  ansible.builtin.debug:
     msg:
       - "{{ modulejail_blocklist_conf_status.stdout }}"
   changed_when:
