@@ -39,7 +39,8 @@
          fi
          checksum_old="$(sha256sum "${blocklist}")"
          modulejail \
-             --warn-only \
+             {% if modulejail_enforce | default(false) %}--fail-on-module-load{% else %}--warn-only{% endif %} \
+             --verbose-logging \
              --profile firewall \
              --whitelist-file /etc/modulejail/{{ modulejail_allowlist }} \
              --output "${blocklist}"
