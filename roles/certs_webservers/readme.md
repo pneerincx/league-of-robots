@@ -4,6 +4,12 @@ This role automatically creates SSL certificates for webservers (*.gcc.rug.nl), 
   * jenkins.gcc.rug.nl
   * docs.gcc.rug.nl
 
+Creating and renewing certificates is handled using the ACME protocol and requires
+* an account + credentials to manage certs for a certain domain and
+* that the Certificate Authority (CA) that is able to sign certificates for that domain provides an ACME interface.
+ 
+The account + credentials + URL for the CA's ACME interface are stored in the encrypted `group_vars/*/secrets.yml`
+
 ### Replacing existing certificates with new ones
 
 On the webserver, delete the existing certificates, auto-renewal config and symlinks:
