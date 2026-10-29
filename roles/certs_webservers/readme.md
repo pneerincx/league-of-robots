@@ -4,7 +4,7 @@ This role automatically creates SSL certificates for webservers (*.gcc.rug.nl), 
   * jenkins.gcc.rug.nl
   * docs.gcc.rug.nl
 
-## Replacing existing certificates with new ones
+### Replacing existing certificates with new ones
 
 On the webserver, delete the existing certificates, auto-renewal config and symlinks:
 
