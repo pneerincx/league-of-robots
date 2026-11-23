@@ -23,11 +23,10 @@ motd: "To solve or not to solve, that's the question."
 # Cluster classification (used by `logs` and `login` roles)
 #
 cluster_class: 'development'
-
+modulejail_enforce: true
 # Install auto-subgroup generate scripts
 # depending on having `ladap` in `ldap_domains`
 subgroup_directories_auto_is_enabled: true
-
 #
 # Ldap settings
 #

@@ -26,6 +26,7 @@ slurm_partitions:
 # Remote logging settings - for diagnostics servers
 #
 cluster_class: 'development'
+modulejail_enforce: true
 repo_manager: 'pulp'
 os_distribution: 'alma9'
 os_minorversion: '.8'

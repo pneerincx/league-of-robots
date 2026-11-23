@@ -45,12 +45,7 @@ modulejail_intel_cpu_modules:
 
 modulejail_dell_server_modules:
   #
-  # dell_laptop: Provides WiFi and Bluetooth support on various Dell Inspiron laptop models.
-  #              Should not be loaded on PowerEdge servers; this is a bug.
   # dell_smbios: used a.o. by the dmidecode command.
-  # fjes: FUJITSU Extended Socket Network Device Driver.
-  #       This is a bug in this driver which uses a too generic ACPI device alias "PNP0C02".
-  #       We do not have this FUJITSU hardware and do not need this module.
   # mgag200: Matrox GA G200 SE GPU driver.
   #          This GPU from 1998 is still a popular choice for servers like Dell PowerEdge machines.
   #

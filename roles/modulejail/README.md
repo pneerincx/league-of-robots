@@ -57,3 +57,21 @@ modprobe --show-depends kernel_module_name \
     | awk '/^insmod/ {print $2}' \
     | sed -E 's|.*/||;s|\.ko\..*$||;s|-|_|g'
 ```
+## Modules that can be blocked
+
+* `dell_laptop`
+  * Provides WiFi and Bluetooth support on various Dell Inspiron laptop models.
+  * Should not be loaded on PowerEdge servers; this is a bug.
+* `fjes`
+  * FUJITSU Extended Socket Network Device Driver.
+  * This is a bug in this driver which uses a too generic ACPI device alias "PNP0C02".
+  * We do not have this FUJITSU hardware.
+* `msdos` alias `fs-msdos`
+  * MS-DOS file system support.
+  * Loading is triggered a.o. by `grub2-mkconfig` when it tries to detect partition / file system types.
+  * Not required as we do not use any such partitions.
+* `rdma_ucm`
+  * Depends on `ib_cm`, `ib_core`, `ib_uverbs`, `iw_cm`, `rdma_cm`.
+  * Loaded when installing the `UCX` module, which is part of the EasyBuild `foss` toolchain.
+  * Unified Communication X (UCX) is a communication framework for modern, high-bandwidth and low-latency networks.
+  * We don't have Infiniband network hardware.
